@@ -1,5 +1,5 @@
 import std/[algorithm, asyncdispatch, asyncfile, hashes, os, osproc, sets,
-            streams, strformat, strutils, tables, uri]
+            streams, strformat, strutils, tables, times, uri]
 import asynctools/asyncproc
 import nimlsppkg/[baseprotocol, logger, suggestlib, utfmapping]
 include nimlsppkg/[messages, messageenums]
@@ -30,11 +30,111 @@ infoLog("explicitSourcePath: ", explicitSourcePath)
 for i in 1..paramCount():
   infoLog("Argument ", i, ": ", paramStr(i))
 
+type
+  # Cache entry for symbol information
+  SymbolCache = object
+    timestamp: float  # When cache was created
+    symbols: seq[Suggest]  # Cached symbols
+
+  # Configuration options
+  NimLspConfig = object
+    inlayHintsEnabled: bool
+    codeLensEnabled: bool
+    semanticTokensEnabled: bool
+    maxCompletionItems: int
+
 var
   gotShutdown = false
   initialized = false
   projectFiles = initTable[string, tuple[nimsuggest: NimSuggest, openFiles: OrderedSet[string], dirtyFiles: HashSet[string]]]()
   openFiles = initTable[string, tuple[projectFile: string, fingerTable: seq[seq[tuple[u16pos, offset: int]]]]]()
+  # Symbol caches for faster lookups
+  outlineCache = initTable[string, SymbolCache]()
+  knownSymbolsCache = initTable[string, SymbolCache]()
+  # Default configuration
+  config = NimLspConfig(
+    inlayHintsEnabled: true,
+    codeLensEnabled: true,
+    semanticTokensEnabled: true,
+    maxCompletionItems: 100
+  )
+
+const
+  CacheExpirationSeconds = 5.0  # Cache expires after 5 seconds
+
+proc isCacheValid(cache: SymbolCache): bool =
+  ## Check if cache is still valid
+  let now = epochTime()
+  result = (now - cache.timestamp) < CacheExpirationSeconds
+
+proc getCachedOutline(fileuri: string, filestash: string): seq[Suggest] =
+  ## Get outline from cache or fetch fresh
+  if fileuri in outlineCache and outlineCache[fileuri].isCacheValid:
+    return outlineCache[fileuri].symbols
+  # Fetch fresh
+  let symbols = getNimsuggest(fileuri).outline(uriToPath(fileuri), dirtyfile = filestash)
+  outlineCache[fileuri] = SymbolCache(timestamp: epochTime(), symbols: symbols)
+  return symbols
+
+proc getCachedKnownSymbols(fileuri: string, filestash: string): seq[Suggest] =
+  ## Get known symbols from cache or fetch fresh
+  if fileuri in knownSymbolsCache and knownSymbolsCache[fileuri].isCacheValid:
+    return knownSymbolsCache[fileuri].symbols
+  # Fetch fresh
+  let symbols = getNimsuggest(fileuri).known(uriToPath(fileuri), dirtyfile = filestash)
+  knownSymbolsCache[fileuri] = SymbolCache(timestamp: epochTime(), symbols: symbols)
+  return symbols
+
+proc invalidateCache(fileuri: string) =
+  ## Invalidate caches for a file
+  outlineCache.del(fileuri)
+  knownSymbolsCache.del(fileuri)
+
+proc getDiagnosticTags(message: string): Option[seq[int]] =
+  ## Get diagnostic tags based on the message content
+  var tags: seq[int] = @[]
+
+  # Check for "unused" patterns - Unnecessary tag
+  if "imported and not used" in message or
+     "is never used" in message or
+     "declared but not used" in message or
+     "is unused" in message:
+    tags.add DiagnosticTag.Unnecessary.int
+
+  # Check for "deprecated" patterns - Deprecated tag
+  if "is deprecated" in message or
+     "deprecated" in message.toLowerAscii:
+    tags.add DiagnosticTag.Deprecated.int
+
+  if tags.len > 0:
+    result = some(tags)
+  else:
+    result = none(seq[int])
+
+proc createDiagnosticFromSuggest(suggest: Suggest): Diagnostic =
+  ## Create a Diagnostic from a nimsuggest Suggest result
+  let
+    message = suggest.doc
+    endcolumn = suggest.column + message.rfind('\'') - message.find('\'') - 1
+    tags = getDiagnosticTags(message)
+
+  result = create(Diagnostic,
+    create(Range,
+      create(Position, suggest.line-1, suggest.column),
+      create(Position, suggest.line-1, max(suggest.column, endcolumn))
+    ),
+    some(case suggest.forth:
+      of "Error": DiagnosticSeverity.Error.int
+      of "Hint": DiagnosticSeverity.Hint.int
+      of "Warning": DiagnosticSeverity.Warning.int
+      else: DiagnosticSeverity.Error.int),
+    none(int),
+    none(CodeDescription),
+    some("nimsuggest chk"),
+    message,
+    tags,
+    none(seq[DiagnosticRelatedInformation])
+  )
 
 template whenValid(data, kind, body) =
   if data.isValid(kind, allowExtra = true):
@@ -330,7 +430,7 @@ proc main(ins: Stream | AsyncFile, outs: Stream | AsyncFile) {.multisync.} =
                 addedSuggestions: HashSet[string]
               for suggestion in suggestions:
                 seenLabels.inc suggestion.collapseByIdentifier
-              for i in 0..suggestions.high:
+              for i in 0..min(suggestions.high, config.maxCompletionItems - 1):
                 let
                   suggestion = suggestions[i]
                   collapsed = suggestion.collapseByIdentifier
@@ -341,6 +441,38 @@ proc main(ins: Stream | AsyncFile, outs: Stream | AsyncFile) {.multisync.} =
                     detail =
                       if seenTimes == 1: some(nimSymDetails(suggestion))
                       else: some(&"[{seenTimes} overloads]")
+                    symKind = suggestion.symKind.TSymKind
+                    # Generate snippet for procedures/functions
+                    (insertText, insertTextFormat) =
+                      if symKind in {skProc, skFunc, skMethod, skTemplate, skMacro, skIterator}:
+                        # Parse signature to create snippet with placeholders
+                        let sig = suggestion.forth
+                        if "(" in sig:
+                          let
+                            parenStart = sig.find('(')
+                            parenEnd = sig.rfind(')')
+                          if parenStart < parenEnd:
+                            let params = sig[parenStart+1..<parenEnd]
+                            if params.len > 0:
+                              var snippetParts: seq[string] = @[]
+                              var paramNum = 1
+                              for param in params.split(','):
+                                let
+                                  trimmed = param.strip()
+                                  colonPos = trimmed.find(':')
+                                  paramName = if colonPos > 0: trimmed[0..<colonPos].strip() else: trimmed
+                                if paramName.len > 0:
+                                  snippetParts.add "${" & $paramNum & ":" & paramName & "}"
+                                  inc paramNum
+                              (some(suggestion.qualifiedPath[^1].strip(chars = {'`'}) & "(" & snippetParts.join(", ") & ")$0"), some(InsertTextFormat.Snippet.int))
+                            else:
+                              (some(suggestion.qualifiedPath[^1].strip(chars = {'`'}) & "()$0"), some(InsertTextFormat.Snippet.int))
+                          else:
+                            (none(string), none(int))
+                        else:
+                          (none(string), none(int))
+                      else:
+                        (none(string), none(int))
                   completionItems.add create(CompletionItem,
                     label = suggestion.qualifiedPath[^1].strip(chars = {'`'}),
                     kind = some(nimSymToLSPKind(suggestion).int),
@@ -350,8 +482,8 @@ proc main(ins: Stream | AsyncFile, outs: Stream | AsyncFile) {.multisync.} =
                     preselect = none(bool),
                     sortText = some(fmt"{i:04}"),
                     filterText = none(string),
-                    insertText = none(string),
-                    insertTextFormat = none(int),
+                    insertText = insertText,
+                    insertTextFormat = insertTextFormat,
                     textEdit = none(TextEdit),
                     additionalTextEdits = none(seq[TextEdit]),
                     commitCharacters = none(seq[string]),
@@ -1465,6 +1597,9 @@ proc main(ins: Stream | AsyncFile, outs: Stream | AsyncFile) {.multisync.} =
               file.close()
               projectFiles[openFiles[fileuri].projectFile].dirtyFiles.incl(filestash)
 
+              # Invalidate cache for this file
+              invalidateCache(fileuri)
+
               # Notify nimsuggest about a file modification.
               discard getNimsuggest(fileuri).mod(uriToPath(fileuri), dirtyfile = filestash)
           of "textDocument/didClose":
@@ -1493,79 +1628,85 @@ proc main(ins: Stream | AsyncFile, outs: Stream | AsyncFile) {.multisync.} =
                 projectFiles[openFiles[fileuri].projectFile].dirtyFiles.incl(filestash)
               debugLog "fileuri: ", fileuri, ", project file: ", openFiles[fileuri].projectFile, ", dirtyfile: ", filestash
 
-              let diagnostics = getNimsuggest(fileuri).chk(uriToPath(fileuri), dirtyfile = filestash)
+              let diagnosticResults = getNimsuggest(fileuri).chk(uriToPath(fileuri), dirtyfile = filestash)
               debugLog "Got diagnostics: ",
-                diagnostics[0..<min(diagnostics.len, 10)],
-                if diagnostics.len > 10: &" and {diagnostics.len-10} more" else: ""
+                diagnosticResults[0..<min(diagnosticResults.len, 10)],
+                if diagnosticResults.len > 10: &" and {diagnosticResults.len-10} more" else: ""
               var response: seq[Diagnostic]
-              for diagnostic in diagnostics:
+              for diagnostic in diagnosticResults:
                 if diagnostic.line == 0:
                   continue
 
                 if diagnostic.filePath != uriToPath(fileuri):
                   continue
-                # Try to guess the size of the identifier
-                let
-                  message = diagnostic.doc
-                  endcolumn = diagnostic.column + message.rfind('\'') - message.find('\'') - 1
-                response.add create(Diagnostic,
-                  create(Range,
-                    create(Position, diagnostic.line-1, diagnostic.column),
-                    create(Position, diagnostic.line-1, max(diagnostic.column, endcolumn))
-                  ),
-                  some(case diagnostic.forth:
-                    of "Error": DiagnosticSeverity.Error.int
-                    of "Hint": DiagnosticSeverity.Hint.int
-                    of "Warning": DiagnosticSeverity.Warning.int
-                    else: DiagnosticSeverity.Error.int),
-                  none(int),
-                  some("nimsuggest chk"),
-                  message,
-                  none(seq[DiagnosticRelatedInformation])
-                )
+                # Use helper to create diagnostic with proper tags
+                response.add createDiagnosticFromSuggest(diagnostic)
 
               # Invoke chk on all open files.
               let projectFile = openFiles[fileuri].projectFile
               for f in projectFiles[projectFile].openFiles.items:
-                let diagnostics = getNimsuggest(f).chk(uriToPath(f), dirtyfile = getFileStash(f))
+                let fileDiagnostics = getNimsuggest(f).chk(uriToPath(f), dirtyfile = getFileStash(f))
                 debugLog "Got diagnostics: ",
-                  diagnostics[0..<min(diagnostics.len, 10)],
-                  if diagnostics.len > 10: &" and {diagnostics.len-10} more" else: ""
+                  fileDiagnostics[0..<min(fileDiagnostics.len, 10)],
+                  if fileDiagnostics.len > 10: &" and {fileDiagnostics.len-10} more" else: ""
 
-                var response: seq[Diagnostic]
-                for diagnostic in diagnostics:
+                var fileResponse: seq[Diagnostic]
+                for diagnostic in fileDiagnostics:
                   if diagnostic.line == 0:
                     continue
 
                   if diagnostic.filePath != uriToPath(f):
                     continue
-                  # Try to guess the size of the identifier
-                  let
-                    message = diagnostic.doc
-                    endcolumn = diagnostic.column + message.rfind('\'') - message.find('\'') - 1
-
-                  response.add create(
-                    Diagnostic,
-                    create(Range,
-                      create(Position, diagnostic.line-1, diagnostic.column),
-                      create(Position, diagnostic.line-1, max(diagnostic.column, endcolumn))
-                    ),
-                    some(case diagnostic.forth:
-                      of "Error": DiagnosticSeverity.Error.int
-                      of "Hint": DiagnosticSeverity.Hint.int
-                      of "Warning": DiagnosticSeverity.Warning.int
-                      else: DiagnosticSeverity.Error.int),
-                    none(int),
-                    some("nimsuggest chk"),
-                    message,
-                    none(seq[DiagnosticRelatedInformation])
-                  )
-                let resp = create(PublishDiagnosticsParams, f, response).JsonNode
-                await outs.notify("textDocument/publishDiagnostics", resp)
+                  # Use helper to create diagnostic with proper tags
+                  fileResponse.add createDiagnosticFromSuggest(diagnostic)
+                let fileResp = create(PublishDiagnosticsParams, f, fileResponse).JsonNode
+                await outs.notify("textDocument/publishDiagnostics", fileResp)
               let resp = create(PublishDiagnosticsParams,
                 fileuri,
                 response).JsonNode
               await outs.notify("textDocument/publishDiagnostics", resp)
+
+          of "workspace/didChangeConfiguration":
+            # Handle configuration changes
+            if message["params"].isSome:
+              let params = message["params"].unsafeGet
+              whenValid(params, DidChangeConfigurationParams):
+                debugLog "Got configuration change"
+                # Configuration is handled - could be used for nimlsp settings
+                # For now, just acknowledge it
+
+          of "workspace/didChangeWatchedFiles":
+            # Handle file system changes
+            if message["params"].isSome:
+              let params = message["params"].unsafeGet
+              whenValid(params, DidChangeWatchedFilesParams):
+                let changes = params["changes"]
+                debugLog "Got file change notifications: ", changes.len
+                for change in changes:
+                  let uri = change["uri"].getStr
+                  let changeType = change["type"].getInt
+                  debugLog "File ", uri, " changed with type ", changeType
+                  # FileChangeType: Created = 1, Changed = 2, Deleted = 3
+                  case changeType:
+                  of 1:  # Created
+                    debugLog "File created: ", uri
+                  of 2:  # Changed
+                    debugLog "File changed: ", uri
+                    # Could trigger re-indexing here
+                  of 3:  # Deleted
+                    debugLog "File deleted: ", uri
+                    # Clean up any cached data for this file
+                  else:
+                    discard
+
+          of "$/cancelRequest":
+            # Handle request cancellation (LSP protocol)
+            if message["params"].isSome:
+              let params = message["params"].unsafeGet
+              whenValid(params, CancelParams):
+                debugLog "Got cancel request for id: ", params["id"]
+                # We don't currently support cancellation, but acknowledge it
+
           else:
             warnLog "Got unknown notification message"
         continue

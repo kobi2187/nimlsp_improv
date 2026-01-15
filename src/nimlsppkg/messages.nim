@@ -45,9 +45,14 @@ jsonSchema:
     "range": Range
     severity ?: int or float
     code ?: int or float or string
+    codeDescription ?: CodeDescription  # NEW: Link to documentation
     source ?: string
     message: string
+    tags ?: int[]  # NEW: DiagnosticTag[] for unnecessary/deprecated
     relatedInformation ?: DiagnosticRelatedInformation[]
+
+  CodeDescription:
+    href: string
 
   DiagnosticRelatedInformation:
     location: Location

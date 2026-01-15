@@ -172,3 +172,8 @@ type
     Source = "source",
     SourceOrganizeImports = "source.organizeImports",
     SourceFixAll = "source.fixAll"
+
+  # Diagnostic tags (LSP 3.15+)
+  DiagnosticTag* {.pure.} = enum
+    Unnecessary = 1,  # Faded out code (unused variables, imports)
+    Deprecated = 2    # Strike-through text (deprecated symbols)
