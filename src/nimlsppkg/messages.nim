@@ -303,23 +303,38 @@ jsonSchema:
     completionProvider ?: CompletionOptions
     signatureHelpProvider ?: SignatureHelpOptions
     definitionProvider ?: bool
+    declarationProvider ?: bool or TextDocumentAndStaticRegistrationOptions  # NEW
     typeDefinitionProvider ?: bool or TextDocumentAndStaticRegistrationOptions
     implementationProvider ?: bool or TextDocumentAndStaticRegistrationOptions
     referencesProvider ?: bool
     documentHighlightProvider ?: bool
     documentSymbolProvider ?: bool
     workspaceSymbolProvider ?: bool
-    codeActionProvider ?: bool
+    codeActionProvider ?: bool or CodeActionOptions  # Extended
     codeLensProvider ?: CodeLensOptions
     documentFormattingProvider ?: bool
     documentRangeFormattingProvider ?: bool
     documentOnTypeFormattingProvider ?: DocumentOnTypeFormattingOptions
-    renameProvider ?: bool
+    renameProvider ?: bool or RenameOptions  # Extended
     documentLinkProvider ?: DocumentLinkOptions
     colorProvider ?: bool or ColorProviderOptions or TextDocumentAndStaticRegistrationOptions
+    foldingRangeProvider ?: bool  # NEW
+    selectionRangeProvider ?: bool  # NEW
+    callHierarchyProvider ?: bool  # NEW
+    typeHierarchyProvider ?: bool  # NEW (LSP 3.17)
+    semanticTokensProvider ?: SemanticTokensOptions  # NEW
+    inlayHintProvider ?: bool  # NEW (LSP 3.17)
     executeCommandProvider ?: ExecuteCommandOptions
     workspace ?: WorkspaceCapability
     experimental ?: any
+
+  # Additional options types
+  CodeActionOptions:
+    codeActionKinds ?: string[]
+    resolveProvider ?: bool
+
+  RenameOptions:
+    prepareProvider ?: bool
 
   InitializedParams:
     DUMMY ?: nil # This is actually an empty object
@@ -594,3 +609,194 @@ jsonSchema:
     textDocument: TextDocumentIdentifier
     position: Position
     newName: string
+
+  # PrepareRename support
+  PrepareRenameParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  PrepareRenameResult:
+    "range": Range
+    placeholder: string
+
+  # DocumentHighlight support
+  DocumentHighlightParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  # TypeDefinition support
+  TypeDefinitionParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  # Implementation support
+  ImplementationParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  # Declaration support
+  DeclarationParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  # FoldingRange support
+  FoldingRangeParams:
+    textDocument: TextDocumentIdentifier
+
+  FoldingRange:
+    startLine: int or float
+    startCharacter ?: int or float
+    endLine: int or float
+    endCharacter ?: int or float
+    kind ?: string  # "comment", "imports", "region"
+
+  # SelectionRange support
+  SelectionRangeParams:
+    textDocument: TextDocumentIdentifier
+    positions: Position[]
+
+  SelectionRange:
+    "range": Range
+    parent ?: SelectionRange
+
+  # CodeAction support
+  CodeActionParams:
+    textDocument: TextDocumentIdentifier
+    "range": Range
+    context: CodeActionContext
+
+  CodeActionContext:
+    diagnostics: Diagnostic[]
+    only ?: string[]  # CodeActionKind[]
+
+  CodeAction:
+    title: string
+    kind ?: string  # CodeActionKind
+    diagnostics ?: Diagnostic[]
+    isPreferred ?: bool
+    edit ?: WorkspaceEdit
+    command ?: Command
+    data ?: any
+
+  # CallHierarchy support
+  CallHierarchyPrepareParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  CallHierarchyItem:
+    name: string
+    kind: int  # SymbolKind
+    tags ?: int[]
+    detail ?: string
+    uri: string
+    "range": Range
+    selectionRange: Range
+    data ?: any
+
+  CallHierarchyIncomingCallsParams:
+    item: CallHierarchyItem
+
+  CallHierarchyIncomingCall:
+    from: CallHierarchyItem
+    fromRanges: Range[]
+
+  CallHierarchyOutgoingCallsParams:
+    item: CallHierarchyItem
+
+  CallHierarchyOutgoingCall:
+    to: CallHierarchyItem
+    fromRanges: Range[]
+
+  # TypeHierarchy support
+  TypeHierarchyPrepareParams extends TextDocumentPositionParams:
+    DUMMY ?: nil
+
+  TypeHierarchyItem:
+    name: string
+    kind: int  # SymbolKind
+    tags ?: int[]
+    detail ?: string
+    uri: string
+    "range": Range
+    selectionRange: Range
+    data ?: any
+
+  TypeHierarchySupertypesParams:
+    item: TypeHierarchyItem
+
+  TypeHierarchySubtypesParams:
+    item: TypeHierarchyItem
+
+  # InlayHint support
+  InlayHintParams:
+    textDocument: TextDocumentIdentifier
+    "range": Range
+
+  InlayHint:
+    position: Position
+    label: string or InlayHintLabelPart[]
+    kind ?: int  # InlayHintKind
+    textEdits ?: TextEdit[]
+    tooltip ?: string or MarkupContent
+    paddingLeft ?: bool
+    paddingRight ?: bool
+    data ?: any
+
+  InlayHintLabelPart:
+    value: string
+    tooltip ?: string or MarkupContent
+    location ?: Location
+    command ?: Command
+
+  # SemanticTokens support
+  SemanticTokensParams:
+    textDocument: TextDocumentIdentifier
+
+  SemanticTokensRangeParams:
+    textDocument: TextDocumentIdentifier
+    "range": Range
+
+  SemanticTokens:
+    resultId ?: string
+    data: int[]
+
+  SemanticTokensLegend:
+    tokenTypes: string[]
+    tokenModifiers: string[]
+
+  SemanticTokensOptions:
+    legend: SemanticTokensLegend
+    "range" ?: bool
+    full ?: bool or SemanticTokensFullOptions
+
+  SemanticTokensFullOptions:
+    delta ?: bool
+
+  # DocumentLink support
+  DocumentLinkParams:
+    textDocument: TextDocumentIdentifier
+
+  DocumentLink:
+    "range": Range
+    target ?: string
+    tooltip ?: string
+    data ?: any
+
+  # WorkspaceSymbol support
+  WorkspaceSymbolParams:
+    query: string
+
+  # Progress support
+  WorkDoneProgressCreateParams:
+    token: int or string
+
+  WorkDoneProgressBegin:
+    kind: string  # "begin"
+    title: string
+    cancellable ?: bool
+    message ?: string
+    percentage ?: int or float
+
+  WorkDoneProgressReport:
+    kind: string  # "report"
+    cancellable ?: bool
+    message ?: string
+    percentage ?: int or float
+
+  WorkDoneProgressEnd:
+    kind: string  # "end"
+    message ?: string

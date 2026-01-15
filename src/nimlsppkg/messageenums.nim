@@ -112,3 +112,63 @@ type
     Text = 1,
     Read = 2,
     Write = 3
+
+  FoldingRangeKind* {.pure.} = enum
+    Comment = "comment",
+    Imports = "imports",
+    Region = "region"
+
+  InlayHintKind* {.pure.} = enum
+    Type = 1,
+    Parameter = 2
+
+  # Semantic token types (LSP 3.16+)
+  SemanticTokenType* {.pure.} = enum
+    Namespace = "namespace",
+    Type = "type",
+    Class = "class",
+    Enum = "enum",
+    Interface = "interface",
+    Struct = "struct",
+    TypeParameter = "typeParameter",
+    Parameter = "parameter",
+    Variable = "variable",
+    Property = "property",
+    EnumMember = "enumMember",
+    Event = "event",
+    Function = "function",
+    Method = "method",
+    Macro = "macro",
+    Keyword = "keyword",
+    Modifier = "modifier",
+    Comment = "comment",
+    String = "string",
+    Number = "number",
+    Regexp = "regexp",
+    Operator = "operator",
+    Decorator = "decorator"
+
+  # Semantic token modifiers (LSP 3.16+)
+  SemanticTokenModifier* {.pure.} = enum
+    Declaration = "declaration",
+    Definition = "definition",
+    Readonly = "readonly",
+    Static = "static",
+    Deprecated = "deprecated",
+    Abstract = "abstract",
+    Async = "async",
+    Modification = "modification",
+    Documentation = "documentation",
+    DefaultLibrary = "defaultLibrary"
+
+  # Code action kinds
+  CodeActionKind* {.pure.} = enum
+    Empty = "",
+    QuickFix = "quickfix",
+    Refactor = "refactor",
+    RefactorExtract = "refactor.extract",
+    RefactorInline = "refactor.inline",
+    RefactorRewrite = "refactor.rewrite",
+    Source = "source",
+    SourceOrganizeImports = "source.organizeImports",
+    SourceFixAll = "source.fixAll"
