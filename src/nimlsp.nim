@@ -2,7 +2,8 @@ import std/[algorithm, asyncdispatch, asyncfile, hashes, os, osproc, sets,
             streams, strformat, strutils, tables, times, uri]
 import asynctools/asyncproc
 import nimlsppkg/[baseprotocol, logger, suggestlib, utfmapping]
-include nimlsppkg/[messages, messageenums]
+include nimlsppkg/messages
+include nimlsppkg/messageenums
 
 
 const
@@ -22,6 +23,23 @@ const
 type
   UriParseError* = object of Defect
     uri: string
+
+proc uriToPath(uri: string): string =
+  ## Convert an RFC 8089 file URI to a native, platform-specific, absolute path.
+  let parsed = uri.parseUri
+  if parsed.scheme != "file":
+    var e = newException(UriParseError, &"Invalid scheme: {parsed.scheme}, only \"file\" is supported")
+    e.uri = uri
+    raise e
+  if parsed.hostname != "":
+    var e = newException(UriParseError, &"Invalid hostname: {parsed.hostname}, only empty hostname is supported")
+    e.uri = uri
+    raise e
+  return normalizedPath(
+    when defined(windows):
+      parsed.path[1..^1]
+    else:
+      parsed.path).decodeUrl
 
 var nimpath = explicitSourcePath
 
@@ -61,6 +79,9 @@ var
 
 const
   CacheExpirationSeconds = 5.0  # Cache expires after 5 seconds
+
+template getNimsuggest(fileuri: string): Nimsuggest =
+  projectFiles[openFiles[fileuri].projectFile].nimsuggest
 
 proc isCacheValid(cache: SymbolCache): bool =
   ## Check if cache is still valid
@@ -198,25 +219,6 @@ proc pathToUri(path: string): string =
       result.add '%'
       result.add toHex(ord(c), 2)
 
-proc uriToPath(uri: string): string =
-  ## Convert an RFC 8089 file URI to a native, platform-specific, absolute path.
-  #let startIdx = when defined(windows): 8 else: 7
-  #normalizedPath(uri[startIdx..^1])
-  let parsed = uri.parseUri
-  if parsed.scheme != "file":
-    var e = newException(UriParseError, &"Invalid scheme: {parsed.scheme}, only \"file\" is supported")
-    e.uri = uri
-    raise e
-  if parsed.hostname != "":
-    var e = newException(UriParseError, &"Invalid hostname: {parsed.hostname}, only empty hostname is supported")
-    e.uri = uri
-    raise e
-  return normalizedPath(
-    when defined(windows):
-      parsed.path[1..^1]
-    else:
-      parsed.path).decodeUrl
-
 proc parseId(node: JsonNode): int =
   if node.kind == JString:
     parseInt(node.getStr)
@@ -278,9 +280,6 @@ proc getProjectFile(fileUri: string): string =
           certainty = Nimble
     path = dir
   debugLog "Found project file " & result & " for input file " & fileUri
-
-template getNimsuggest(fileuri: string): Nimsuggest =
-  projectFiles[openFiles[fileuri].projectFile].nimsuggest
 
 if paramCount() == 1:
   case paramStr(1):

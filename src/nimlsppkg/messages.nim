@@ -533,14 +533,6 @@ jsonSchema:
     location: Location
     containerName ?: string
 
-  CodeActionParams:
-    textDocument: TextDocumentIdentifier
-    "range": Range
-    context: CodeActionContext
-
-  CodeActionContext:
-    diagnostics: Diagnostic[]
-
   CodeLensParams:
     textDocument: TextDocumentIdentifier
 
@@ -551,14 +543,6 @@ jsonSchema:
 
   CodeLensRegistrationOptions extends TextDocumentRegistrationOptions:
     resolveProvider ?: bool
-
-  DocumentLinkParams:
-    textDocument: TextDocumentIdentifier
-
-  DocumentLink:
-    "range": Range
-    target ?: string # DocumentUri
-    data ?: any
 
   DocumentLinkRegistrationOptions extends TextDocumentRegistrationOptions:
     resolveProvider ?: bool
@@ -696,14 +680,14 @@ jsonSchema:
     item: CallHierarchyItem
 
   CallHierarchyIncomingCall:
-    from: CallHierarchyItem
+    "from": CallHierarchyItem
     fromRanges: Range[]
 
   CallHierarchyOutgoingCallsParams:
     item: CallHierarchyItem
 
   CallHierarchyOutgoingCall:
-    to: CallHierarchyItem
+    "to": CallHierarchyItem
     fromRanges: Range[]
 
   # TypeHierarchy support
@@ -780,10 +764,6 @@ jsonSchema:
     target ?: string
     tooltip ?: string
     data ?: any
-
-  # WorkspaceSymbol support
-  WorkspaceSymbolParams:
-    query: string
 
   # Progress support
   WorkDoneProgressCreateParams:

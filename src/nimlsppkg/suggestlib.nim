@@ -6,6 +6,7 @@ export Suggest
 export IdeCmd
 export NimSuggest
 export initNimSuggest
+export TSymKind
 
 
 proc stopNimSuggest*(nimsuggest: NimSuggest): int = 42
