@@ -281,12 +281,16 @@ proc getProjectFile(fileUri: string): string =
     path = dir
   debugLog "Found project file " & result & " for input file " & fileUri
 
-if paramCount() == 1:
-  case paramStr(1):
+# Parse command line arguments
+var customNimPath = ""
+for i in 1..paramCount():
+  let arg = paramStr(i)
+  case arg:
     of "--help":
-      echo "Usage: nimlsp [OPTION | PATH]\n"
+      echo "Usage: nimlsp [OPTIONS] [PATH]\n"
       echo "--help, shows this message"
       echo "--version, shows only the version"
+      echo "--stdio, use stdio for communication (default)"
       echo "PATH, path to the Nim source directory, defaults to \"", nimpath, "\""
       quit 0
     of "--version":
@@ -294,7 +298,15 @@ if paramCount() == 1:
       when defined(debugLogging): echo "Compiled with debug logging"
       when defined(debugCommunication): echo "Compiled with communication logging"
       quit 0
-    else: nimpath = expandFilename(paramStr(1))
+    of "--stdio":
+      # This is the default behavior, ignore it
+      discard
+    else:
+      # Treat as path to Nim sources
+      customNimPath = arg
+
+if customNimPath != "":
+  nimpath = expandFilename(customNimPath)
 if not fileExists(nimpath / "config/nim.cfg"):
   stderr.write &"""Unable to find "config/nim.cfg" in "{nimpath
   }". Supply the Nim project folder by adding it as an argument.
